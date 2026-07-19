@@ -235,3 +235,11 @@ svg { display: block; width: 100%; height: auto; }
   border: 1px solid var(--critical); color: var(--critical);
 }
 ol.bullets { padding-left: 20px; }
+
+.ipbox {
+  display: inline-block; padding: 6px 12px; margin: 6px 0;
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 6px; font-family: ui-monospace, monospace;
+  font-size: 14px; font-weight: 600; letter-spacing: .02em;
+  color: var(--text-primary); user-select: all;
+}

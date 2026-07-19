@@ -31,6 +31,17 @@ export async function POST(req: Request) {
     cache: "no-store",
   });
   if (!tokRes.ok) {
+    // 403 ip-not-allowed 와 401 인증실패는 원인이 완전히 다르다.
+    // 뭉뚱그리면 사용자가 IP 등록을 빠뜨린 걸 영영 모른다.
+    let code = "";
+    try { code = (await tokRes.clone().json())?.error?.code ?? ""; } catch {}
+    if (tokRes.status === 403 || code === "ip-not-allowed") {
+      return NextResponse.json({
+        error: "IP_NOT_ALLOWED",
+        message: "토스증권에 서버 IP가 등록되지 않았습니다.",
+        serverIp: process.env.WORKER_OUTBOUND_IP ?? null,
+      }, { status: 403 });
+    }
     return NextResponse.json(
       { error: "자격증명이 유효하지 않습니다. 토스증권 WTS 에서 발급한 값인지 확인해주세요." },
       { status: 401 });

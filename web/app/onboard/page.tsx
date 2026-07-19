@@ -8,6 +8,7 @@ export default function Onboard() {
   const [sec, setSec] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [ipErr, setIpErr] = useState<string | null>(null);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -18,7 +19,15 @@ export default function Onboard() {
         body: JSON.stringify({ clientId: id.trim(), clientSecret: sec.trim() }),
       });
       const d = await res.json();
-      if (!res.ok) { setErr(d.error ?? "연결에 실패했습니다."); return; }
+      if (!res.ok) {
+        if (d.error === "IP_NOT_ALLOWED") {
+          setIpErr(d.serverIp ?? "(서버 IP 미설정 — 운영자에게 문의)");
+          setErr(null);
+        } else {
+          setErr(d.error ?? "연결에 실패했습니다."); setIpErr(null);
+        }
+        return;
+      }
       r.push("/"); r.refresh();
     } catch {
       setErr("네트워크 오류가 발생했습니다.");
@@ -49,6 +58,20 @@ export default function Onboard() {
 
           {err && <div className="err">{err}</div>}
 
+          {ipErr && (
+            <div className="err" style={{ textAlign: "left" }}>
+              <b>서버 IP가 토스증권에 등록되지 않았습니다.</b>
+              <p style={{ margin: "8px 0" }}>
+                토스증권 Open API 는 허용된 IP 에서만 호출할 수 있습니다.
+                아래 주소를 화이트리스트에 추가한 뒤 다시 시도해주세요.
+              </p>
+              <code className="ipbox">{ipErr}</code>
+              <p style={{ margin: "8px 0 0", fontSize: 12 }}>
+                토스증권 WTS → 설정 → Open API → 허용 IP 에 추가
+              </p>
+            </div>
+          )}
+
           <button className="btn" disabled={busy || !id || !sec}>
             {busy ? "확인 중…" : "연결하고 시작하기"}
           </button>
@@ -58,6 +81,11 @@ export default function Onboard() {
       <div className="card" style={{ marginTop: 14 }}>
         <h2>연결 전에 알아두세요</h2>
         <ul className="bullets">
+          <li>
+            <b>서버 IP를 먼저 등록해야 합니다.</b> 토스 Open API 는 IP 화이트리스트
+            방식이라, 키만 발급받으면 연결되지 않습니다. 아래 발급 방법 3단계를
+            반드시 함께 해주세요.
+          </li>
           <li>
             <b>다른 토스 API 도구를 쓰고 계시면 그쪽 연결이 끊깁니다.</b>{" "}
             토스는 Client ID 당 토큰을 하나만 유지해서, 여기서 연결하는 순간
@@ -84,7 +112,17 @@ export default function Onboard() {
         <ol className="bullets">
           <li>토스증권 PC 웹(WTS)에 로그인합니다.</li>
           <li>설정 → Open API 메뉴로 이동합니다.</li>
-          <li>Client ID와 Client Secret을 발급받아 위에 붙여넣습니다.</li>
+          <li>Client ID와 Client Secret을 발급받습니다.</li>
+          <li>
+            <b>같은 화면의 허용 IP 목록에 아래 주소를 추가합니다.</b>
+            <br />
+            <code className="ipbox">{process.env.NEXT_PUBLIC_WORKER_IP ?? "운영자에게 문의"}</code>
+            <br />
+            <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+              이 단계를 빠뜨리면 키가 유효해도 데이터가 조회되지 않습니다.
+            </span>
+          </li>
+          <li>위 입력란에 Client ID와 Secret을 붙여넣습니다.</li>
         </ol>
       </div>
     </div>

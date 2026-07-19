@@ -1,0 +1,48 @@
+# Render Blueprint — 토스 API 를 쓰는 작업만 여기서 돈다.
+#
+# 왜 나눴나
+#   토스 Open API 는 IP 화이트리스트 방식이라 GitHub Actions 처럼
+#   러너 IP 가 매번 바뀌는 환경에서는 호출할 수 없다(403 ip-not-allowed).
+#   → 토스를 쓰지 않는 뉴스·감성·보존 정리는 GitHub Actions 에 그대로 두고,
+#     토스를 쓰는 시세·계좌·전략만 고정 IP 를 가진 여기로 옮긴다.
+#
+# 배포 후 반드시
+#   Render 대시보드 → 서비스 → Connect → Outbound 탭의 IP 를 전부
+#   토스증권 Open API 허용 IP 에 등록해야 한다. 안 하면 전부 403 이다.
+
+services:
+  # 장중 1분봉 — 평일 KST 09~16시 매시 정각 (UTC 00~07시)
+  - type: cron
+    name: toss-market
+    runtime: python
+    plan: starter
+    schedule: "0 0-7 * * 1-5"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python3 worker/main.py market
+    envVars: &tossEnv
+      - key: DATABASE_URL
+        sync: false
+      - key: TOSS_CLIENT_ID
+        sync: false
+      - key: TOSS_CLIENT_SECRET
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: DART_API_KEY
+        sync: false
+      - key: CREDENTIAL_MASTER_KEY
+        sync: false
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: TZ
+        value: Asia/Seoul
+
+  # 일간 배치 — KST 08시 / 21시 (UTC 23시 / 12시)
+  - type: cron
+    name: toss-daily
+    runtime: python
+    plan: starter
+    schedule: "30 23,12 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python3 worker/main.py daily
+    envVars: *tossEnv
