@@ -40,11 +40,28 @@ class TokenManager:
         self._id = client_id
         self._secret = client_secret
         self._conn = conn
+        self._uid_cache: str | None = None
 
     # ── 내부 ────────────────────────────────────────────────
-    def _read(self) -> tuple[str, datetime] | None:
+    def _owner(self) -> str | None:
+        """이 client_id 를 소유한 사용자. 멀티유저 전환 후 toss_token 의
+        PK 가 user_id 라서, 공용 경로도 소유자 행을 찾아 써야 한다."""
+        if self._uid_cache is not None:
+            return self._uid_cache
         with self._conn.cursor() as cur:
-            cur.execute("SELECT access_token, expires_at FROM toss_token WHERE id = 1")
+            cur.execute("SELECT user_id FROM user_credential WHERE client_id = %s",
+                        (self._id,))
+            row = cur.fetchone()
+        self._uid_cache = str(row[0]) if row else None
+        return self._uid_cache
+
+    def _read(self) -> tuple[str, datetime] | None:
+        uid = self._owner()
+        if not uid:
+            return None
+        with self._conn.cursor() as cur:
+            cur.execute("SELECT access_token, expires_at FROM toss_token WHERE user_id = %s",
+                        (uid,))
             row = cur.fetchone()
         return (row[0], row[1]) if row else None
 
@@ -68,19 +85,24 @@ class TokenManager:
         token = d["access_token"]
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(d["expires_in"]))
 
+        uid = self._owner()
+        if not uid:
+            # 아직 온보딩되지 않은 자격증명 — DB 에 캐시하지 않고 그대로 쓴다
+            log.info("소유자 미등록 client_id — 토큰을 캐시하지 않습니다")
+            return token, expires_at
         with self._conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO toss_token (id, access_token, token_type, issued_at, expires_at, updated_at)
-                VALUES (1, %s, %s, now(), %s, now())
-                ON CONFLICT (id) DO UPDATE
+                INSERT INTO toss_token (user_id, access_token, token_type, issued_at, expires_at, updated_at)
+                VALUES (%s, %s, %s, now(), %s, now())
+                ON CONFLICT (user_id) DO UPDATE
                    SET access_token = EXCLUDED.access_token,
                        token_type   = EXCLUDED.token_type,
                        issued_at    = now(),
                        expires_at   = EXCLUDED.expires_at,
                        updated_at   = now()
                 """,
-                (token, d.get("token_type", "Bearer"), expires_at),
+                (uid, token, d.get("token_type", "Bearer"), expires_at),
             )
         self._conn.commit()
         log.info("토큰 재발급 완료 (만료 %s)", expires_at.isoformat(timespec="seconds"))

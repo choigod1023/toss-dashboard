@@ -351,6 +351,13 @@ class job_run:
         return self
 
     def __exit__(self, exc_type, exc, tb):
+        # 예외가 났으면 트랜잭션이 깨져 있다. 롤백하지 않고 INSERT 를 시도하면
+        # InFailedSqlTransaction 이 나서 **진짜 원인이 가려진다**(실제로 물렸던 버그).
+        if exc is not None:
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
         with self.conn.cursor() as cur:
             cur.execute(
                 "UPDATE job_run SET ended_at=now(), ok=%s, rows=%s, error=%s WHERE id=%s",
