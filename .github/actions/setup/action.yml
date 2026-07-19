@@ -1,0 +1,12 @@
+name: 워커 환경 준비
+description: Python 설치 + 의존성 캐시
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+        cache: pip
+        cache-dependency-path: requirements.txt
+    - shell: bash
+      run: pip install -q -r requirements.txt

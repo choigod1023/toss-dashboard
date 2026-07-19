@@ -1,0 +1,26 @@
+name: 장중 시세 수집
+
+on:
+  schedule:
+    # 평일 KST 09~16시 매시 정각 → UTC 00~07시
+    - cron: "0 0-7 * * 1-5"
+  workflow_dispatch:
+
+concurrency:
+  group: worker-market
+  cancel-in-progress: true
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: 1분봉
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          TOSS_CLIENT_ID: ${{ secrets.TOSS_CLIENT_ID }}
+          TOSS_CLIENT_SECRET: ${{ secrets.TOSS_CLIENT_SECRET }}
+          CREDENTIAL_MASTER_KEY: ${{ secrets.CREDENTIAL_MASTER_KEY }}
+        run: python3 worker/main.py market

@@ -1,0 +1,21 @@
+# 시크릿 — 절대 커밋 금지
+.env
+.env.*
+!.env.example
+web/.env.local
+*.pem
+*.key
+
+.vercel
+node_modules/
+.next/
+out/
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+.DS_Store
+*.log
+data/

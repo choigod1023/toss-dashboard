@@ -1,0 +1,30 @@
+name: 뉴스 수집 · 감성분석
+
+on:
+  schedule:
+    # KST 07/12/18/22시 → UTC 22/03/09/13시
+    - cron: "10 22,3,9,13 * * *"
+  workflow_dispatch:
+
+concurrency:
+  # 겹쳐 돌면 같은 글을 중복 채점하고 rate limit 만 쓴다
+  group: worker-analysis
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: RSS · 뉴스 · 감성
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          TOSS_CLIENT_ID: ${{ secrets.TOSS_CLIENT_ID }}
+          TOSS_CLIENT_SECRET: ${{ secrets.TOSS_CLIENT_SECRET }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+          CREDENTIAL_MASTER_KEY: ${{ secrets.CREDENTIAL_MASTER_KEY }}
+        run: python3 worker/main.py news

@@ -1,0 +1,18 @@
+name: 데이터 보존 정리
+
+on:
+  schedule:
+    - cron: "0 18 * * *"     # KST 03시
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: drop_chunks
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python3 worker/db/retention.py

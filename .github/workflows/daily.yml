@@ -1,0 +1,28 @@
+name: 일간 배치 · 전략 생성
+
+on:
+  schedule:
+    # KST 08시 / 21시 → UTC 23시 / 12시
+    - cron: "30 23,12 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: worker-analysis
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: 일봉 · 지표 · 13F · 포트폴리오 · 전략
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          TOSS_CLIENT_ID: ${{ secrets.TOSS_CLIENT_ID }}
+          TOSS_CLIENT_SECRET: ${{ secrets.TOSS_CLIENT_SECRET }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          DART_API_KEY: ${{ secrets.DART_API_KEY }}
+          CREDENTIAL_MASTER_KEY: ${{ secrets.CREDENTIAL_MASTER_KEY }}
+        run: python3 worker/main.py daily
