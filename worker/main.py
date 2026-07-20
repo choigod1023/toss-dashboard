@@ -216,14 +216,14 @@ def cmd_news(conn, symbols: list[str], s) -> None:
 
 def cmd_market(c, conn) -> None:
     """장중 1분봉. 휴장이면 즉시 종료한다."""
-    J.report_ip(conn, os.environ.get("WORKER_SOURCE", "render"))
+    J.report_ip(conn)          # 실행 환경을 자동 판별한다
     job_minute_candles(c, conn)
     job_maintenance(c, conn)
 
 
 def cmd_daily(c, conn, symbols: list[str], s) -> None:
     """일봉·지표·13F·애널리스트·브리핑·국면 → 사용자별 포트폴리오·전략."""
-    J.report_ip(conn, os.environ.get("WORKER_SOURCE", "render"))
+    J.report_ip(conn)          # 실행 환경을 자동 판별한다
     job_reference(c, conn, symbols)
     job_daily_candles(c, conn)
     job_indicators(c, conn)

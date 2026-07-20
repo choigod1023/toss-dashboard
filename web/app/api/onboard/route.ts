@@ -94,6 +94,15 @@ export async function POST(req: Request) {
               ${accountSeq}, now(), now())`;
   }
 
+  // 수집용 자격증명이 아직 없으면 이 계정을 지정한다.
+  // (공용 시세·캔들·지표 수집이 쓸 자격증명. 하나만 지정된다)
+  await sql()`
+    UPDATE user_credential SET is_collector = true
+     WHERE user_id = ${userId}
+       AND NOT EXISTS (SELECT 1 FROM user_credential
+                        WHERE is_collector AND status = 'active'
+                          AND user_id <> ${userId})`;
+
   const expiresAt = new Date(Date.now() + Number(tok.expires_in ?? 3600) * 1000);
   await sql()`
     INSERT INTO toss_token (user_id, access_token, expires_at)

@@ -372,7 +372,25 @@ class job_run:
 
 
 # ── 워커 outbound IP 보고 ────────────────────────────────────
-def report_ip(conn: psycopg.Connection, source: str = "unknown") -> str | None:
+def detect_source() -> str:
+    """실행 환경 자동 판별.
+
+    사용자에게 '이 IP 를 등록하세요'라고 안내할 수 있는 건 **배포 서버**뿐이다.
+    개발자 노트북에서 돌린 IP 를 안내하면 사용자만 헛수고한다.
+    """
+    import os
+    if os.environ.get("RENDER") or os.environ.get("RENDER_SERVICE_ID"):
+        return "render"
+    if os.environ.get("GITHUB_ACTIONS"):
+        return "actions"      # 러너 IP 는 매번 바뀌어 등록 불가 → 안내에서 제외
+    if os.environ.get("FLY_APP_NAME"):
+        return "fly"
+    if os.environ.get("WORKER_SOURCE"):
+        return os.environ["WORKER_SOURCE"]
+    return "local"
+
+
+def report_ip(conn: psycopg.Connection, source: str | None = None) -> str | None:
     """이 서버의 공인 IP 를 DB 에 기록한다.
 
     사용자는 이 IP 를 자기 토스 계정의 허용 IP 에 등록해야 한다.
@@ -380,6 +398,7 @@ def report_ip(conn: psycopg.Connection, source: str = "unknown") -> str | None:
     프론트는 항상 **현재 유효한 주소**를 안내할 수 있다.
     """
     import httpx as _httpx
+    source = source or detect_source()
     ip = None
     for svc in ("https://api.ipify.org", "https://ifconfig.me/ip",
                 "https://icanhazip.com"):
@@ -402,5 +421,9 @@ def report_ip(conn: psycopg.Connection, source: str = "unknown") -> str | None:
                 source    = COALESCE(EXCLUDED.source, worker_ip.source)
         """, (ip, source))
     conn.commit()
-    log.info("outbound IP %s (%s) 보고됨 — 토스 허용 IP 에 등록 필요", ip, source)
+    if source in ("local", "actions", "unknown"):
+        log.info("outbound IP %s (%s) 기록 — 안내에는 노출하지 않음", ip, source)
+    else:
+        log.info("outbound IP %s (%s) 보고됨 — 사용자가 토스 허용 IP 에 "
+                 "등록해야 하는 주소입니다", ip, source)
     return ip

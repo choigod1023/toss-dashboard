@@ -188,10 +188,14 @@ export async function getInstitutionTop() {
  *  env 에 박지 않는다 — 호스팅이 IP 를 바꾸면 워커가 다음 실행에서
  *  자동으로 갱신하고, 여기 읽는 값도 따라 바뀐다. */
 export async function getWorkerIps() {
+  // ⚠️ source='local' 은 개발자 노트북에서 돌린 기록이다.
+  //    사용자가 그 IP 를 토스에 등록해봐야 아무 소용이 없다
+  //    (실제 수집은 배포 서버에서 돈다). 운영 소스만 노출한다.
   return await sql()`
     SELECT host(ip) AS ip, source, last_seen, run_count
     FROM worker_ip
     WHERE last_seen > now() - interval '30 days'
+      AND source NOT IN ('local', 'unknown')
     ORDER BY last_seen DESC` as
     { ip: string; source: string; last_seen: string; run_count: number }[];
 }
