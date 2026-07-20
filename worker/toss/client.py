@@ -50,10 +50,8 @@ class TossClient:
             from accounts import UserTokenManager
             self._tokens = UserTokenManager(conn, user_id)
         else:
-            self._tokens = TokenManager(
-                settings.toss_base_url, settings.toss_client_id,
-                settings.toss_client_secret, conn,
-            )
+            # 공용 수집도 DB 의 자격증명을 쓴다 (환경변수에 박지 않는다)
+            self._tokens = TokenManager(settings.toss_base_url, conn)
         self._limiter = RateLimiter()
         self._account_seq: str | None = account_seq or settings.toss_account_seq or None
 

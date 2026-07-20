@@ -34,25 +34,50 @@ REFRESH_MARGIN = timedelta(minutes=30)
 
 
 class TokenManager:
-    def __init__(self, base_url: str, client_id: str, client_secret: str,
-                 conn: psycopg.Connection) -> None:
+    """공용 수집용 토큰.
+
+    ⚠️ 자격증명을 환경변수에 박지 않는다.
+       토스 시크릿은 사용자가 WTS 에서 언제든 재발급할 수 있는 **동적 값**이다.
+       env 에 두면 재발급할 때마다 .env / Render / GitHub Secrets 를
+       전부 고쳐야 하고, 하나라도 빠지면 조용히 401 이 난다(실제로 겪었다).
+
+       → 단일 출처는 DB(user_credential)다. 웹 온보딩으로 갱신하면
+         워커가 자동으로 새 값을 집어간다. 배포·재시작이 필요 없다.
+    """
+
+    def __init__(self, base_url: str, conn: psycopg.Connection) -> None:
         self._base_url = base_url
-        self._id = client_id
-        self._secret = client_secret
         self._conn = conn
         self._uid_cache: str | None = None
+        self._creds_cache: tuple[str, str] | None = None
+
+    def _creds(self) -> tuple[str, str]:
+        """is_collector 로 지정된 자격증명. 없으면 가장 먼저 온보딩한 사용자."""
+        if self._creds_cache:
+            return self._creds_cache
+        import os
+        key = os.environ.get("CREDENTIAL_MASTER_KEY", "")
+        if not key:
+            raise RuntimeError("CREDENTIAL_MASTER_KEY 가 없습니다")
+        with self._conn.cursor() as cur:
+            cur.execute("""
+                SELECT user_id, client_id, pgp_sym_decrypt(client_secret_enc, %s)
+                  FROM user_credential
+                 WHERE status = 'active'
+                 ORDER BY is_collector DESC, created_at
+                 LIMIT 1
+            """, (key,))
+            row = cur.fetchone()
+        if not row:
+            raise RuntimeError(
+                "수집용 자격증명이 없습니다 — 웹에서 토스 계정을 한 번 연결하세요")
+        self._uid_cache = str(row[0])
+        self._creds_cache = (row[1], row[2])
+        return self._creds_cache
 
     # ── 내부 ────────────────────────────────────────────────
     def _owner(self) -> str | None:
-        """이 client_id 를 소유한 사용자. 멀티유저 전환 후 toss_token 의
-        PK 가 user_id 라서, 공용 경로도 소유자 행을 찾아 써야 한다."""
-        if self._uid_cache is not None:
-            return self._uid_cache
-        with self._conn.cursor() as cur:
-            cur.execute("SELECT user_id FROM user_credential WHERE client_id = %s",
-                        (self._id,))
-            row = cur.fetchone()
-        self._uid_cache = str(row[0]) if row else None
+        self._creds()          # _uid_cache 를 채운다
         return self._uid_cache
 
     def _read(self) -> tuple[str, datetime] | None:
@@ -70,12 +95,13 @@ class TokenManager:
         return exp - REFRESH_MARGIN > datetime.now(timezone.utc)
 
     def _issue(self) -> tuple[str, datetime]:
+        cid, csec = self._creds()
         r = httpx.post(
             f"{self._base_url}/oauth2/token",
             data={
                 "grant_type": "client_credentials",
-                "client_id": self._id,
-                "client_secret": self._secret,
+                "client_id": cid,
+                "client_secret": csec,
             },
             timeout=30.0,
         )

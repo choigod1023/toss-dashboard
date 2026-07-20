@@ -102,10 +102,12 @@ class Settings:
 
     def missing(self) -> list[str]:
         """비어 있는 필수 키 이름 목록. 값은 절대 반환하지 않는다."""
+        # 토스 자격증명은 **DB(user_credential)** 가 단일 출처다.
+        # 사용자가 WTS 에서 재발급하면 웹 온보딩으로 갱신되고,
+        # 워커는 그걸 자동으로 집어간다. env 에 둘 이유가 없다.
         required = {
             "DATABASE_URL": self.database_url,
-            "TOSS_CLIENT_ID": self.toss_client_id,
-            "TOSS_CLIENT_SECRET": self.toss_client_secret,
+            "CREDENTIAL_MASTER_KEY": os.environ.get("CREDENTIAL_MASTER_KEY", ""),
         }
         if self.sentiment_backend == "gemini":
             required["GEMINI_API_KEY"] = self.gemini_api_key

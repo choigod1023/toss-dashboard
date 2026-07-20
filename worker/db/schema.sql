@@ -522,3 +522,23 @@ LEFT JOIN LATERAL (
     WHERE p.cik = cur.cik AND p.cusip = cur.cusip AND p.period < cur.period
     ORDER BY p.period DESC LIMIT 1
 ) prev ON TRUE;
+
+
+-- ============================================================
+--  12. 워커 outbound IP — 사용자가 토스에 등록해야 할 주소
+-- ============================================================
+--  토스 Open API 는 IP 화이트리스트 방식이라, 사용자는 **우리 워커의
+--  outbound IP** 를 자기 토스 계정에 등록해야 한다.
+--
+--  ⚠️ 이 값을 환경변수에 박으면 안 된다.
+--     호스팅이 IP 를 바꾸면 프론트는 옛날 IP 를 계속 보여주고,
+--     사용자는 왜 안 되는지 알 길이 없다.
+--     → 워커가 실행할 때마다 자기 IP 를 여기 보고하고,
+--       프론트는 이 표를 읽어 **현재 유효한 IP** 를 안내한다.
+CREATE TABLE IF NOT EXISTS worker_ip (
+    ip          inet PRIMARY KEY,
+    source      text,                    -- render | local | actions | ...
+    first_seen  timestamptz NOT NULL DEFAULT now(),
+    last_seen   timestamptz NOT NULL DEFAULT now(),
+    run_count   int NOT NULL DEFAULT 1
+);

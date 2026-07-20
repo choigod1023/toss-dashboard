@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -215,12 +216,14 @@ def cmd_news(conn, symbols: list[str], s) -> None:
 
 def cmd_market(c, conn) -> None:
     """장중 1분봉. 휴장이면 즉시 종료한다."""
+    J.report_ip(conn, os.environ.get("WORKER_SOURCE", "render"))
     job_minute_candles(c, conn)
     job_maintenance(c, conn)
 
 
 def cmd_daily(c, conn, symbols: list[str], s) -> None:
     """일봉·지표·13F·애널리스트·브리핑·국면 → 사용자별 포트폴리오·전략."""
+    J.report_ip(conn, os.environ.get("WORKER_SOURCE", "render"))
     job_reference(c, conn, symbols)
     job_daily_candles(c, conn)
     job_indicators(c, conn)
@@ -288,11 +291,84 @@ def _retention(conn) -> None:
         retention.run(conn, dry=False)
 
 
+def cmd_doctor(s) -> None:
+    """실행 환경 진단. 시크릿 값은 절대 출력하지 않는다.
+
+    Render/Actions 처럼 로그만 볼 수 있는 환경에서 무엇이 빠졌는지
+    한눈에 보려고 만든다. startCommand 를 잠시 이걸로 바꿔 돌리면 된다.
+    """
+    import os, socket
+    print("=" * 60)
+    print("환경 진단")
+    print("=" * 60)
+    print(f"  python      {sys.version.split()[0]}")
+    print(f"  cwd         {os.getcwd()}")
+    print(f"  hostname    {socket.gethostname()}")
+
+    print("\n[환경변수] 값이 아니라 '있는지'만 확인")
+    for k in ("DATABASE_URL", "DATABASE_URL_UNPOOLED", "POSTGRES_URL_NON_POOLING",
+              "TOSS_CLIENT_ID", "TOSS_CLIENT_SECRET", "GEMINI_API_KEY",
+              "DART_API_KEY", "CREDENTIAL_MASTER_KEY", "ALLOW_ORDERS"):
+        v = os.environ.get(k)
+        print(f"  {k:28} {'<' + str(len(v)) + '자>' if v else '<없음>'}")
+
+    print("\n[.env 파일] Render Secret File 로 올렸으면 여기 보인다")
+    root = Path(__file__).resolve().parent.parent
+    for f in (root / ".env", root / "web" / ".env.local", Path("/etc/secrets/.env")):
+        print(f"  {str(f):40} {'있음' if f.is_file() else '없음'}")
+
+    print("\n[DB 연결]")
+    if not s.database_url:
+        print("  ❌ database_url 이 비어 있음 — 위 환경변수 확인")
+    else:
+        try:
+            with psycopg.connect(s.database_url, connect_timeout=15) as c, c.cursor() as cur:
+                cur.execute("select current_database(), inet_server_addr()::text, version()")
+                db, addr, ver = cur.fetchone()
+                print(f"  ✅ 연결 성공  db={db}  server={addr}")
+                print(f"     {ver[:60]}")
+                cur.execute("select count(*) from job_run")
+                print(f"     job_run {cur.fetchone()[0]}행  ← 여기 숫자가 로컬과 같아야 같은 DB")
+        except Exception as e:
+            print(f"  ❌ 연결 실패: {type(e).__name__}: {str(e)[:200]}")
+
+    print("\n[토스 API] IP 화이트리스트 확인")
+    try:
+        import httpx
+        r = httpx.post(f"{s.toss_base_url}/oauth2/token", data={
+            "grant_type": "client_credentials",
+            "client_id": s.toss_client_id,
+            "client_secret": s.toss_client_secret}, timeout=20)
+        if r.status_code == 200:
+            print("  ✅ 토큰 발급 성공 — 이 서버 IP 가 허용되어 있음")
+        else:
+            body = r.text[:200]
+            print(f"  ❌ HTTP {r.status_code}  {body}")
+            if "ip-not-allowed" in body:
+                print("     → 이 서버의 outbound IP 를 토스 허용 IP 에 등록해야 함")
+    except Exception as e:
+        print(f"  ❌ {type(e).__name__}: {str(e)[:150]}")
+
+    print("\n[이 서버의 공인 IP] 토스에 등록할 주소")
+    try:
+        import httpx
+        for svc in ("https://api.ipify.org", "https://ifconfig.me/ip"):
+            try:
+                ip = httpx.get(svc, timeout=10).text.strip()
+                print(f"  {ip}   (출처: {svc})")
+                break
+            except Exception:
+                continue
+    except Exception as e:
+        print(f"  조회 실패: {str(e)[:100]}")
+    print("=" * 60)
+
+
 # ── main ─────────────────────────────────────────────────────
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("mode", choices=["backfill", "once", "run", "analyze",
-                                     "news", "market", "daily"])
+                                     "news", "market", "daily", "doctor"])
     ap.add_argument("--symbols", default=",".join(DEFAULT_WATCH))
     ap.add_argument("--pages", type=int, default=3,
                     help="backfill 시 일봉 페이지 수 (1페이지=200봉≈10개월)")
@@ -303,6 +379,10 @@ def main() -> None:
     missing = s.missing()
     if missing:
         sys.exit(f"설정 누락: {', '.join(missing)} → open -e ~/toss-dashboard/.env")
+
+    if a.mode == "doctor":
+        cmd_doctor(s)
+        return
 
     conn = connect(s)
     c = TossClient(s, conn)

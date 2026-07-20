@@ -369,3 +369,38 @@ class job_run:
         else:
             log.info("[%s] 완료 — %s행", self.name, self.rows)
         return False
+
+
+# ── 워커 outbound IP 보고 ────────────────────────────────────
+def report_ip(conn: psycopg.Connection, source: str = "unknown") -> str | None:
+    """이 서버의 공인 IP 를 DB 에 기록한다.
+
+    사용자는 이 IP 를 자기 토스 계정의 허용 IP 에 등록해야 한다.
+    호스팅이 IP 를 바꿔도 다음 실행에서 자동으로 갱신되므로,
+    프론트는 항상 **현재 유효한 주소**를 안내할 수 있다.
+    """
+    import httpx as _httpx
+    ip = None
+    for svc in ("https://api.ipify.org", "https://ifconfig.me/ip",
+                "https://icanhazip.com"):
+        try:
+            ip = _httpx.get(svc, timeout=10).text.strip()
+            if ip:
+                break
+        except Exception:
+            continue
+    if not ip:
+        log.warning("공인 IP 조회 실패 — 프론트 안내가 갱신되지 않습니다")
+        return None
+
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO worker_ip (ip, source) VALUES (%s, %s)
+            ON CONFLICT (ip) DO UPDATE SET
+                last_seen = now(),
+                run_count = worker_ip.run_count + 1,
+                source    = COALESCE(EXCLUDED.source, worker_ip.source)
+        """, (ip, source))
+    conn.commit()
+    log.info("outbound IP %s (%s) 보고됨 — 토스 허용 IP 에 등록 필요", ip, source)
+    return ip

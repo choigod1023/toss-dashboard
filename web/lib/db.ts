@@ -183,3 +183,15 @@ export async function getInstitutionTop() {
             WHERE h3.cik = h.cik AND h3.period = h.period) AS aum
     FROM institution_holding h ORDER BY institution, weight DESC` as any[];
 }
+
+/** 워커가 보고한 outbound IP. 사용자가 토스 허용 IP 에 등록해야 할 주소.
+ *  env 에 박지 않는다 — 호스팅이 IP 를 바꾸면 워커가 다음 실행에서
+ *  자동으로 갱신하고, 여기 읽는 값도 따라 바뀐다. */
+export async function getWorkerIps() {
+  return await sql()`
+    SELECT host(ip) AS ip, source, last_seen, run_count
+    FROM worker_ip
+    WHERE last_seen > now() - interval '30 days'
+    ORDER BY last_seen DESC` as
+    { ip: string; source: string; last_seen: string; run_count: number }[];
+}
