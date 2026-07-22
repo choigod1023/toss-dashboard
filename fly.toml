@@ -11,10 +11,21 @@
 #       egress-ip 를 따로 할당해야 아웃바운드가 고정된다 — 헷갈리기 쉬운 함정)
 #   2) 할당된 IP 를 토스 WTS → 설정 → Open API → 허용 IP 에 등록
 #
-# 이 앱은 인바운드 서비스가 아니다(스케줄러 상주). http_service 를 두지 않는다.
+# 프로세스 2개
+#   worker : 스케줄러 상주 (수집·분석)
+#   api    : 온보딩 검증 프록시
+#            Vercel 은 IP 가 유동이라 토스를 직접 못 부른다(403).
+#            고정 egress IP 를 가진 여기서 대신 호출한다.
+#
+# ⚠️ egress IP 는 **머신 단위**다. 배포로 머신이 새로 생기면 IP 가 따라오지
+#    않는다. 배포 후 반드시 `fly machine egress-ip list` 로 확인하고,
+#    없으면 재할당한 뒤 그 IP 를 토스에 다시 등록해야 한다.
 
 app = "toss-dashboard-worker"
-primary_region = "nrt"          # 도쿄 — 한국에서 가장 가깝다
+primary_region = "sin"          # 싱가포르
+# ⚠️ 도쿄(nrt)는 egress IP 재고가 없었다 ("No more egress IPs available").
+#    IP 는 리전에 묶이므로 리전을 바꾸면 IP 도 바뀌고,
+#    토스 화이트리스트를 다시 등록해야 한다. 함부로 옮기지 말 것.
 
 [build]
   dockerfile = "Dockerfile"
@@ -32,3 +43,12 @@ primary_region = "nrt"          # 도쿄 — 한국에서 가장 가깝다
 # (멈추면 cron 이 안 돈다)
 [processes]
   worker = "python3 worker/main.py run"
+  api    = "python3 worker/api.py"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false      # 온보딩 요청을 놓치지 않게 상주
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["api"]

@@ -1,19 +1,27 @@
 import { NextResponse } from "next/server";
-import { randomBytes, createHash } from "crypto";
 import { sql } from "@/lib/db";
 import { SESSION_COOKIE } from "@/lib/session";
 import { kickoffCollection, isDataFresh } from "@/lib/kickoff";
 
-const BASE = "https://openapi.tossinvest.com";
+export const maxDuration = 60;
 
-/** 토스 키를 검증하고 세션을 발급한다. 별도 로그인은 없다 —
- *  자격증명이 곧 신원이다. 검증 실패 시 아무것도 저장하지 않는다. */
+/** 온보딩 — 토스 키를 받아 검증하고 세션을 발급한다.
+ *
+ *  ⚠️ 토스는 IP 화이트리스트 방식인데 Vercel 은 요청마다 IP 가 달라서
+ *     직접 호출하면 403 ip-not-allowed 가 난다.
+ *     → 고정 egress IP 를 가진 Fly 워커(/verify)에 위임한다.
+ *       사용자는 **그 서버 IP 하나만** 토스에 등록하면 된다.
+ *
+ *  WORKER_API_URL 이 없으면(로컬 개발) 직접 호출로 폴백한다.
+ */
+const TOSS = "https://openapi.tossinvest.com";
+
 export async function POST(req: Request) {
   let clientId = "", clientSecret = "";
   try {
-    const body = await req.json();
-    clientId = String(body.clientId ?? "").trim();
-    clientSecret = String(body.clientSecret ?? "").trim();
+    const b = await req.json();
+    clientId = String(b.clientId ?? "").trim();
+    clientSecret = String(b.clientSecret ?? "").trim();
   } catch {
     return NextResponse.json({ error: "요청 형식이 올바르지 않습니다." }, { status: 400 });
   }
@@ -21,26 +29,65 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Client ID 와 Secret 을 모두 입력해주세요." }, { status: 400 });
   }
 
-  // 1) 실제로 동작하는 키인지 확인 — 검증 전에는 저장하지 않는다
-  const tokRes = await fetch(`${BASE}/oauth2/token`, {
+  const workerUrl = process.env.WORKER_API_URL;
+  const token = process.env.INTERNAL_API_TOKEN;
+
+  // ── 경로 A: 워커 프록시 (배포 환경) ──
+  if (workerUrl && token) {
+    let r: Response;
+    try {
+      r = await fetch(`${workerUrl}/verify`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+          "X-Forwarded-UA": req.headers.get("user-agent") ?? "",
+        },
+        body: JSON.stringify({ clientId, clientSecret }),
+        cache: "no-store",
+      });
+    } catch {
+      return NextResponse.json(
+        { error: "수집 서버에 연결할 수 없습니다. 잠시 후 다시 시도해주세요." },
+        { status: 503 });
+    }
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      if (d.error === "IP_NOT_ALLOWED") {
+        return NextResponse.json({ error: "IP_NOT_ALLOWED", message: d.message },
+                                 { status: 403 });
+      }
+      return NextResponse.json({ error: d.error ?? "자격증명이 유효하지 않습니다." },
+                               { status: r.status });
+    }
+
+    const res = NextResponse.json({
+      ok: true, accountSeq: d.accountSeq,
+      collecting: !!d.collecting, reusedData: !!d.reusedData,
+    });
+    res.cookies.set(SESSION_COOKIE, d.sessionToken, {
+      httpOnly: true, secure: process.env.NODE_ENV === "production",
+      sameSite: "lax", path: "/", maxAge: 60 * 60 * 24 * 30,
+    });
+    return res;
+  }
+
+  // ── 경로 B: 직접 호출 (로컬 개발 — 이 머신 IP 가 등록돼 있어야 한다) ──
+  const tokRes = await fetch(`${TOSS}/oauth2/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      grant_type: "client_credentials",
-      client_id: clientId, client_secret: clientSecret,
+      grant_type: "client_credentials", client_id: clientId, client_secret: clientSecret,
     }),
     cache: "no-store",
   });
   if (!tokRes.ok) {
-    // 403 ip-not-allowed 와 401 인증실패는 원인이 완전히 다르다.
-    // 뭉뚱그리면 사용자가 IP 등록을 빠뜨린 걸 영영 모른다.
     let code = "";
-    try { code = (await tokRes.clone().json())?.error?.code ?? ""; } catch {}
+    try { code = (await tokRes.clone().json())?.error?.code ?? ""; } catch { /* noop */ }
     if (tokRes.status === 403 || code === "ip-not-allowed") {
       return NextResponse.json({
         error: "IP_NOT_ALLOWED",
-        message: "토스증권에 서버 IP가 등록되지 않았습니다.",
-        serverIp: process.env.WORKER_OUTBOUND_IP ?? null,
+        message: "토스증권에 서버 IP 가 등록되지 않았습니다.",
       }, { status: 403 });
     }
     return NextResponse.json(
@@ -49,8 +96,7 @@ export async function POST(req: Request) {
   }
   const tok = await tokRes.json();
 
-  // 2) 계좌 확보
-  const accRes = await fetch(`${BASE}/api/v1/accounts`, {
+  const accRes = await fetch(`${TOSS}/api/v1/accounts`, {
     headers: { Authorization: `Bearer ${tok.access_token}` }, cache: "no-store",
   });
   const accounts = accRes.ok ? ((await accRes.json())?.result ?? []) : [];
@@ -59,8 +105,6 @@ export async function POST(req: Request) {
   }
   const accountSeq = String(accounts[0].accountSeq);
 
-  // 3) 저장 — client_secret 은 워커의 마스터키로 봉인해야 하므로
-  //    여기서는 pgcrypto 로 봉인한다 (같은 키를 공유)
   const masterKey = process.env.CREDENTIAL_MASTER_KEY;
   if (!masterKey) {
     return NextResponse.json({ error: "서버 설정 오류 (마스터 키 없음)" }, { status: 500 });
@@ -74,8 +118,6 @@ export async function POST(req: Request) {
 
   let userId: string;
   if (existing.length) {
-    // 이미 등록된 client_id — 새 secret 을 제시했다는 건 토스에서
-    // 재발급받을 수 있는 실소유자라는 뜻이다.
     userId = existing[0].user_id;
     await sql()`
       UPDATE user_credential
@@ -95,11 +137,7 @@ export async function POST(req: Request) {
               ${accountSeq}, now(), now())`;
   }
 
-  // 방금 검증에 성공한 자격증명을 수집용으로 지정한다.
-  // ⚠️ "이미 지정된 게 있으면 건드리지 않는다"로 두면 안 된다 —
-  //    옛 자격증명이 무효화된 뒤 새로 온보딩해도 죽은 것이 collector 로
-  //    남아 수집이 계속 401 을 맞는다(실제로 겪었다).
-  //    지금 막 토스가 유효하다고 확인해준 것이 가장 믿을 만한 후보다.
+  // 방금 검증에 성공한 자격증명을 수집용으로 승격 (죽은 키가 남아있으면 안 된다)
   await sql()`UPDATE user_credential SET is_collector = false WHERE is_collector`;
   await sql()`UPDATE user_credential SET is_collector = true WHERE user_id = ${userId}`;
 
@@ -111,7 +149,7 @@ export async function POST(req: Request) {
       access_token = EXCLUDED.access_token, expires_at = EXCLUDED.expires_at,
       issued_at = now(), updated_at = now()`;
 
-  // 4) 세션 — 쿠키엔 원문, DB엔 해시
+  const { randomBytes, createHash } = await import("crypto");
   const raw = randomBytes(32).toString("base64url");
   const digest = createHash("sha256")
     .update((process.env.SESSION_PEPPER ?? "") + raw).digest();
@@ -120,17 +158,11 @@ export async function POST(req: Request) {
     VALUES (${digest}, ${userId}, now() + interval '30 days',
             ${req.headers.get("user-agent") ?? null})`;
 
-  // 첫 수집을 붙여둔다. 이게 없으면 가입 직후 대시보드가 텅 비어 있고
-  // 다음 스케줄까지 기다려야 한다.
-  // 단, 최근에 수집한 데이터가 있으면 그대로 쓴다 — 재온보딩할 때마다
-  // 일봉·지표·13F 를 다시 긁으면 rate limit 과 LLM 호출만 낭비된다.
   const fresh = await isDataFresh();
   const kick = fresh ? { started: false } : kickoffCollection();
 
   const res = NextResponse.json({
-    ok: true, accountSeq,
-    collecting: kick.started,
-    reusedData: fresh,
+    ok: true, accountSeq, collecting: kick.started, reusedData: fresh,
   });
   res.cookies.set(SESSION_COOKIE, raw, {
     httpOnly: true, secure: process.env.NODE_ENV === "production",

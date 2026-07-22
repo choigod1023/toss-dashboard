@@ -1,11 +1,9 @@
 "use client";
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 
 type WorkerIp = { ip: string; source: string; last_seen: string };
 
 export default function OnboardForm({ workerIps }: { workerIps: WorkerIp[] }) {
-  const r = useRouter();
   const [id, setId] = useState("");
   const [sec, setSec] = useState("");
   const [busy, setBusy] = useState(false);
@@ -43,10 +41,13 @@ export default function OnboardForm({ workerIps }: { workerIps: WorkerIp[] }) {
         setPhase(null); setBusy(false);
         setStarted(true); setReused(!!d.reusedData);
         // 첫 수집은 수 분 걸린다. 기다리게 하지 말고 대시보드로 보낸다.
-        setTimeout(() => { r.push("/"); r.refresh(); }, 2200);
+        // ⚠️ r.push 는 클라이언트 라우팅이라 방금 심은 세션 쿠키를
+        //    서버 컴포넌트가 못 읽고 다시 /onboard 로 튕길 수 있다.
+        //    전체 리로드로 새 요청을 보낸다.
+        setTimeout(() => { window.location.href = "/"; }, 1800);
         return;
       }
-      r.push("/"); r.refresh();
+      window.location.href = "/";
     } catch {
       setErr("네트워크 오류가 발생했습니다.");
     } finally {

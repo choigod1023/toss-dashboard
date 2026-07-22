@@ -73,3 +73,24 @@ flyctl scale count 1           # ⚠️ 반드시 1대. 여러 대면 토스 토
 - shared-cpu-1x 512MB 상주: Fly 요금표 확인 필요 (미확인)
 
 무료 티어 한도 안에 드는지는 `flyctl` 대시보드에서 실사용량을 봐야 정확하다.
+
+## 실제 배포에서 걸린 함정 (겪은 순서대로)
+
+1. **도쿄(nrt) egress IP 재고 없음** — `No more egress IPs available`.
+   싱가포르(sin)로 옮겨 해결. IP 는 리전에 묶이므로 리전을 바꾸면 IP 도 바뀐다.
+2. **트라이얼 조직은 egress IP 할당 불가** — 카드 등록 필요.
+3. **egress IP 는 머신 단위** — `fly deploy` 로 머신이 새로 생기면 따라오지 않는다.
+   배포 후 반드시 `fly machine egress-ip list` 확인.
+4. **할당만으로는 반영 안 됨** — 머신을 재시작해야 실제 outbound 가 바뀐다.
+5. **Fly 내부망은 IPv6** — `0.0.0.0` 바인딩이면 프로세스는 살아있는데
+   프록시가 못 붙어 Connection refused. dual-stack(`::`)으로 열어야 한다.
+6. **인바운드 IP 도 따로 필요** — `fly ips allocate-v4 --shared`.
+7. **SESSION_PEPPER 누락** — Fly 가 빈 페퍼로 세션을 해시하고 Vercel 은
+   진짜 페퍼로 검증해서 영원히 불일치. 대시보드가 계속 온보딩으로 튕겼다.
+
+## 현재 IP (토스 허용 IP 에 둘 다 등록)
+
+```
+209.71.95.247   api    — 온보딩 검증 프록시
+209.71.95.232   worker — 스케줄 수집
+```
