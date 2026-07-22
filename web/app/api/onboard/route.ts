@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { randomBytes, createHash } from "crypto";
 import { sql } from "@/lib/db";
 import { SESSION_COOKIE } from "@/lib/session";
+import { kickoffCollection, isDataFresh } from "@/lib/kickoff";
 
 const BASE = "https://openapi.tossinvest.com";
 
@@ -94,14 +95,13 @@ export async function POST(req: Request) {
               ${accountSeq}, now(), now())`;
   }
 
-  // 수집용 자격증명이 아직 없으면 이 계정을 지정한다.
-  // (공용 시세·캔들·지표 수집이 쓸 자격증명. 하나만 지정된다)
-  await sql()`
-    UPDATE user_credential SET is_collector = true
-     WHERE user_id = ${userId}
-       AND NOT EXISTS (SELECT 1 FROM user_credential
-                        WHERE is_collector AND status = 'active'
-                          AND user_id <> ${userId})`;
+  // 방금 검증에 성공한 자격증명을 수집용으로 지정한다.
+  // ⚠️ "이미 지정된 게 있으면 건드리지 않는다"로 두면 안 된다 —
+  //    옛 자격증명이 무효화된 뒤 새로 온보딩해도 죽은 것이 collector 로
+  //    남아 수집이 계속 401 을 맞는다(실제로 겪었다).
+  //    지금 막 토스가 유효하다고 확인해준 것이 가장 믿을 만한 후보다.
+  await sql()`UPDATE user_credential SET is_collector = false WHERE is_collector`;
+  await sql()`UPDATE user_credential SET is_collector = true WHERE user_id = ${userId}`;
 
   const expiresAt = new Date(Date.now() + Number(tok.expires_in ?? 3600) * 1000);
   await sql()`
@@ -120,7 +120,18 @@ export async function POST(req: Request) {
     VALUES (${digest}, ${userId}, now() + interval '30 days',
             ${req.headers.get("user-agent") ?? null})`;
 
-  const res = NextResponse.json({ ok: true, accountSeq });
+  // 첫 수집을 붙여둔다. 이게 없으면 가입 직후 대시보드가 텅 비어 있고
+  // 다음 스케줄까지 기다려야 한다.
+  // 단, 최근에 수집한 데이터가 있으면 그대로 쓴다 — 재온보딩할 때마다
+  // 일봉·지표·13F 를 다시 긁으면 rate limit 과 LLM 호출만 낭비된다.
+  const fresh = await isDataFresh();
+  const kick = fresh ? { started: false } : kickoffCollection();
+
+  const res = NextResponse.json({
+    ok: true, accountSeq,
+    collecting: kick.started,
+    reusedData: fresh,
+  });
   res.cookies.set(SESSION_COOKIE, raw, {
     httpOnly: true, secure: process.env.NODE_ENV === "production",
     sameSite: "lax", path: "/", maxAge: 60 * 60 * 24 * 30,

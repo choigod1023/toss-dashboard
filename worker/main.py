@@ -24,9 +24,9 @@ import psycopg
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import accounts as ACC                          # noqa: E402
-from analysis import gemini, regime, strategy   # noqa: E402
+from analysis import gemini, rebalance, regime, strategy  # noqa: E402
 from collectors import jobs as J                 # noqa: E402
-from collectors import rss, sec13f, sources      # noqa: E402
+from collectors import rss, sec13f, sources, universe   # noqa: E402
 from config import get_settings                  # noqa: E402
 from toss import TossClient                      # noqa: E402
 
@@ -149,6 +149,33 @@ def job_13f(conn) -> None:
             sec13f.link_tickers(conn)
 
 
+def job_universe(c, conn) -> None:
+    """추천 후보 풀. 랭킹으로 실재하는 종목만 모으고 ETF 를 분류한다.
+
+    ⚠️ 이게 없으면 LLM 이 추천 종목을 기억에서 지어낸다
+       (상장폐지 종목·없는 티커). 후보를 DB 로 강제하는 근거다.
+    """
+    with J.job_run(conn, "universe") as j:
+        j.rows = universe.collect_rankings(c, conn, count=30)
+        j.rows += universe.enrich_universe(c, conn)
+        j.rows += universe.classify_etfs(conn)
+
+
+def job_rebalance(conn, s) -> None:
+    """사용자별 리밸런싱 계획. 목표 비중은 코드가, 설명은 LLM 이."""
+    users = ACC.active_users(conn)
+    if not users:
+        return
+    with J.job_run(conn, "rebalance") as j:
+        for uid, _ in users:
+            try:
+                if rebalance.build_plan(conn, s.sentiment_model,
+                                        s.gemini_api_key, uid):
+                    j.rows += 1
+            except Exception as e:
+                log.warning("[rebalance] %s 실패: %s", uid[:8], str(e)[:140])
+
+
 def job_regime(conn) -> None:
     """공포탐욕지수. 국내는 자체 산출(공인 지표 아님)."""
     with J.job_run(conn, "regime") as j:
@@ -231,7 +258,9 @@ def cmd_daily(c, conn, symbols: list[str], s) -> None:
     job_briefing(conn, s, symbols)
     job_regime(conn)
     job_13f(conn)
+    job_universe(c, conn)          # 후보 풀을 먼저 채운다
     job_portfolio_all(conn, s)
+    job_rebalance(conn, s)         # 포트폴리오 지표가 있어야 계산된다
     job_maintenance(c, conn)
 
 
@@ -273,15 +302,27 @@ def cmd_run(c, conn, symbols: list[str], s) -> None:
     # 13F 는 분기 공시 — 하루 1회면 충분 (새 분기 없으면 즉시 종료)
     sch.add_job(lambda: job_13f(conn),
                 CronTrigger(hour=6, minute=30), id="sec13f")
+    # 랭킹은 장 마감 후 하루 1회 (당일 거래대금·등락률이 확정된 뒤)
+    sch.add_job(lambda: job_universe(c, conn),
+                CronTrigger(day_of_week="mon-fri", hour=20, minute=20), id="universe")
     sch.add_job(lambda: job_briefing(conn, s, symbols),
                 CronTrigger(hour="8,21", minute=30), id="briefing")
     # 전략은 브리핑·국면이 끝난 뒤에 (장 시작 전, 마감 후)
     sch.add_job(lambda: job_portfolio_all(conn, s),
                 CronTrigger(hour="8,21", minute=45), id="strategy")
+    # 리밸런싱은 전략 뒤에 (portfolio_metrics 가 갱신된 다음)
+    sch.add_job(lambda: job_rebalance(conn, s),
+                CronTrigger(hour="8,21", minute=55), id="rebalance")
 
     log.info("스케줄러 시작 — 등록된 작업 %d개 (Ctrl+C 로 종료)", len(sch.get_jobs()))
-    for j in sch.get_jobs():
-        log.info("  %-12s next=%s", j.id, j.next_run_time)
+
+    # ⚠️ APScheduler 3.x 는 start() 전에는 next_run_time 이 없다.
+    #    시작 직후 한 번 찍어야 실제 예약 시각이 보인다.
+    def _show():
+        for j in sorted(sch.get_jobs(), key=lambda x: x.next_run_time or 0):
+            log.info("  %-12s 다음 실행 %s", j.id,
+                     j.next_run_time.strftime("%m-%d %H:%M") if j.next_run_time else "-")
+    sch.add_job(_show, "date", id="_show", replace_existing=True)
     sch.start()
 
 

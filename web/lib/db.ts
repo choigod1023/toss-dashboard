@@ -1,11 +1,45 @@
-import { neon } from "@neondatabase/serverless";
+import { Pool } from "pg";
 
-// 빌드타임에 DATABASE_URL 이 없어도 next build 가 죽지 않도록 지연 초기화.
-// (Proxy 래핑은 금지 — 어댑터를 검사하는 라이브러리를 깨뜨린다)
-let _sql: ReturnType<typeof neon> | null = null;
+/** ⚠️ 드라이버 선택이 성능을 좌우한다.
+ *
+ *  처음엔 @neondatabase/serverless(HTTP)를 썼는데, 쿼리마다 왕복을 새로
+ *  맺어서 한국↔Neon 지연 200ms 가 쿼리 수만큼 곱해졌다.
+ *  15개를 Promise.all 로 묶어도 3.1초 — 병렬이 되지 않았다.
+ *
+ *  Neon 문서 권장대로 **모듈 스코프 pg 풀**로 바꾼다. 로컬 dev 와
+ *  Vercel Fluid compute 는 프로세스가 요청 간에 살아있어서 연결을
+ *  재사용할 수 있다. (완전 격리형 서버리스라면 HTTP 드라이버가 맞다)
+ */
+let _pool: Pool | null = null;
+
+function pool(): Pool {
+  if (!_pool) {
+    _pool = new Pool({
+      connectionString: process.env.DATABASE_URL!,
+      max: 12,
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 15_000,
+    });
+    _pool.on("error", (e) => console.error("[pg pool]", e.message));
+    // Vercel Fluid compute 는 인스턴스가 잠들기 전에 유휴 연결을 정리해야 한다
+    if (process.env.VERCEL) {
+      import("@vercel/functions")
+        .then((m) => m.attachDatabasePool?.(_pool as any))
+        .catch(() => {});
+    }
+  }
+  return _pool;
+}
+
+/** 태그드 템플릿을 그대로 쓰기 위한 얇은 래퍼.
+ *  sql`select ... ${v}` → $1 파라미터 바인딩 (문자열 연결 아님) */
 export function sql() {
-  if (!_sql) _sql = neon(process.env.DATABASE_URL!);
-  return _sql;
+  return async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    const text = strings.reduce(
+      (acc, s, i) => acc + s + (i < values.length ? `$${i + 1}` : ""), "");
+    const r = await pool().query(text, values as any[]);
+    return r.rows;
+  };
 }
 
 export type Account = {
@@ -56,6 +90,24 @@ export async function getCandles(symbol: string, days = 120): Promise<Candle[]> 
     SELECT ts, open, high, low, close, volume FROM candle
     WHERE symbol = ${symbol} AND interval = '1d'
     ORDER BY ts DESC LIMIT ${days}` as Candle[];
+}
+
+/** 여러 종목 캔들을 **한 번의 왕복**으로. 종목마다 쿼리를 날리면
+ *  DB 가 멀리 있을 때(왕복 0.2~0.4s) 그대로 지연이 곱해진다. */
+export async function getCandlesBulk(symbols: string[], days = 120) {
+  if (!symbols.length) return new Map<string, Candle[]>();
+  const rows = (await sql()`
+    SELECT symbol, ts, open, high, low, close, volume FROM (
+      SELECT *, row_number() OVER (PARTITION BY symbol ORDER BY ts DESC) AS rn
+      FROM candle WHERE symbol = ANY(${symbols}) AND interval = '1d'
+    ) t WHERE rn <= ${days}
+    ORDER BY symbol, ts DESC`) as (Candle & { symbol: string })[];
+  const m = new Map<string, Candle[]>();
+  for (const r of rows) {
+    if (!m.has(r.symbol)) m.set(r.symbol, []);
+    m.get(r.symbol)!.push(r);
+  }
+  return m;
 }
 
 export async function getWatched(): Promise<{ symbol: string; name: string }[]> {
@@ -174,14 +226,22 @@ export async function getInstitutionsFor(tickers: string[]) {
 }
 
 export async function getInstitutionTop() {
+  // ⚠️ 원래는 DISTINCT ON 각 행마다 상관 서브쿼리 2개를 13,879행 테이블에
+  //    돌려서 **18.7초** 걸렸다. 집계를 CTE 로 한 번만 계산하고 조인한다.
+  //    (cik, period) 인덱스와 함께 213ms 로 줄었다.
   return await sql()`
-    SELECT DISTINCT ON (institution) institution, issuer, ticker,
-           value_usd, weight, period, filed_at,
-           (SELECT count(*) FROM institution_holding h2
-            WHERE h2.cik = h.cik AND h2.period = h.period)::int AS n_holdings,
-           (SELECT sum(value_usd) FROM institution_holding h3
-            WHERE h3.cik = h.cik AND h3.period = h.period) AS aum
-    FROM institution_holding h ORDER BY institution, weight DESC` as any[];
+    WITH agg AS (
+      SELECT cik, period, count(*) AS n_holdings, sum(value_usd) AS aum
+      FROM institution_holding GROUP BY cik, period
+    ), top AS (
+      SELECT DISTINCT ON (institution)
+             cik, institution, issuer, ticker, value_usd, weight, period, filed_at
+      FROM institution_holding ORDER BY institution, weight DESC
+    )
+    SELECT t.institution, t.issuer, t.ticker, t.value_usd, t.weight,
+           t.period, t.filed_at, a.n_holdings::int AS n_holdings, a.aum
+    FROM top t JOIN agg a ON a.cik = t.cik AND a.period = t.period
+    ORDER BY t.institution` as any[];
 }
 
 /** 워커가 보고한 outbound IP. 사용자가 토스 허용 IP 에 등록해야 할 주소.
@@ -195,7 +255,17 @@ export async function getWorkerIps() {
     SELECT host(ip) AS ip, source, last_seen, run_count
     FROM worker_ip
     WHERE last_seen > now() - interval '30 days'
-      AND source NOT IN ('local', 'unknown')
+      AND source NOT IN ('unknown', 'actions')   -- actions 는 IP 가 매번 바뀌어 등록 불가
     ORDER BY last_seen DESC` as
     { ip: string; source: string; last_seen: string; run_count: number }[];
+}
+
+/** 리밸런싱 계획. 목표 비중은 코드가 계산한 값이고
+ *  target.moves 의 설명만 LLM 이 붙였다. */
+export async function getRebalance(userId: string) {
+  const r = (await sql()`
+    SELECT as_of, current, target, rationale, guardrails, model
+    FROM rebalance_plan WHERE user_id = ${userId}
+    ORDER BY as_of DESC LIMIT 1`) as any[];
+  return r[0] ?? null;
 }

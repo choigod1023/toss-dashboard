@@ -542,3 +542,72 @@ CREATE TABLE IF NOT EXISTS worker_ip (
     last_seen   timestamptz NOT NULL DEFAULT now(),
     run_count   int NOT NULL DEFAULT 1
 );
+
+--  기관별 집계(보유수·AUM)를 빠르게 하기 위한 인덱스.
+--  없으면 DISTINCT ON + 상관 서브쿼리가 13,879행을 반복 스캔해서
+--  대시보드 한 쿼리가 18초를 먹는다(실제로 겪었다).
+CREATE INDEX IF NOT EXISTS idx_inst_cik_period ON institution_holding (cik, period);
+
+
+-- ============================================================
+--  13. 종목 유니버스 · 랭킹
+-- ============================================================
+--  ⚠️ 추천 후보를 LLM 기억에서 꺼내면 안 된다.
+--     상장폐지된 종목이나 없는 티커를 지어낸다.
+--     → 토스 랭킹 API 로 **실재하는 종목만** 매일 적재하고,
+--       추천은 이 표 안에서만 고르게 한다.
+CREATE TABLE IF NOT EXISTS ranking_snapshot (
+    as_of         date NOT NULL,
+    market        text NOT NULL,        -- KR | US
+    rank_type     text NOT NULL,        -- MARKET_TRADING_AMOUNT | TOP_GAINERS ...
+    duration      text NOT NULL,
+    rank          int  NOT NULL,
+    symbol        text NOT NULL,
+    last_price    numeric(20,6),
+    change_rate   numeric(12,6),
+    trading_value numeric(24,2),
+    PRIMARY KEY (as_of, market, rank_type, duration, rank)
+);
+CREATE INDEX IF NOT EXISTS idx_ranking_symbol ON ranking_snapshot (symbol, as_of DESC);
+
+--  ETF 는 종목마스터의 security_type='ETF' 로 구분된다(토스가 제공).
+--  자산군·지역·테마는 API 에 없어서 이름에서 규칙으로 유추한다.
+--  ⚠️ 규칙 기반이라 완벽하지 않다. classified_by 로 출처를 남긴다.
+CREATE TABLE IF NOT EXISTS etf_profile (
+    symbol        text PRIMARY KEY REFERENCES stock(symbol) ON DELETE CASCADE,
+    name          text,
+    asset_class   text,      -- equity | bond | commodity | mixed
+    region        text,      -- KR | US | GLOBAL | CN | JP ...
+    theme         text,      -- semiconductor | bigtech | dividend | index ...
+    leverage      numeric(4,2),   -- 2.0 = 레버리지, -1.0 = 인버스
+    is_hedged     boolean,
+    classified_by text,      -- rule | manual
+    updated_at    timestamptz NOT NULL DEFAULT now()
+);
+
+--  리밸런싱 제안 — 결정론적 계산 + LLM 서술
+--  ⚠️ 목표 비중은 코드가 계산한다. LLM 은 이유를 설명만 한다.
+CREATE TABLE IF NOT EXISTS rebalance_plan (
+    user_id     uuid NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
+    as_of       timestamptz NOT NULL,
+    current     jsonb NOT NULL,   -- [{symbol,name,weight,value}]
+    target      jsonb NOT NULL,   -- [{symbol,name,target_weight,delta,reason}]
+    candidates  jsonb,            -- 추가 검토 대상 (실재 확인된 종목만)
+    rationale   text,
+    guardrails  jsonb,            -- 적용한 규칙 (집중도 상한 등)
+    model       text,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, as_of)
+);
+
+--  상담 대화 — 이어서 물어볼 수 있게
+CREATE TABLE IF NOT EXISTS advice_thread (
+    id         bigserial PRIMARY KEY,
+    user_id    uuid NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
+    role       text NOT NULL CHECK (role IN ('user','assistant')),
+    content    text NOT NULL,
+    facts      jsonb,             -- 답변에 사용한 실제 숫자 (검증용)
+    model      text,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_advice_user ON advice_thread (user_id, created_at);

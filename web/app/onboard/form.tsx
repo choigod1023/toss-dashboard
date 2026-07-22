@@ -11,10 +11,18 @@ export default function OnboardForm({ workerIps }: { workerIps: WorkerIp[] }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [ipErr, setIpErr] = useState<string | null>(null);
+  const [started, setStarted] = useState(false);
+  const [phase, setPhase] = useState<string | null>(null);
+  const [reused, setReused] = useState(false);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    setBusy(true); setErr(null);
+    setBusy(true); setErr(null); setIpErr(null);
+    // 토스 검증에 왕복이 두 번(토큰·계좌) 있어 몇 초 걸린다.
+    // 아무 표시가 없으면 멈춘 것처럼 보인다.
+    setPhase("토스증권에 자격증명을 확인하는 중…");
+    const t1 = setTimeout(() => setPhase("계좌 정보를 가져오는 중…"), 2500);
+    const t2 = setTimeout(() => setPhase("조금만 더 기다려주세요…"), 6000);
     try {
       const res = await fetch("/api/onboard", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -30,10 +38,22 @@ export default function OnboardForm({ workerIps }: { workerIps: WorkerIp[] }) {
         }
         return;
       }
+      if (d.collecting || d.reusedData) {
+        clearTimeout(t1); clearTimeout(t2);
+        setPhase(null); setBusy(false);
+        setStarted(true); setReused(!!d.reusedData);
+        // 첫 수집은 수 분 걸린다. 기다리게 하지 말고 대시보드로 보낸다.
+        setTimeout(() => { r.push("/"); r.refresh(); }, 2200);
+        return;
+      }
       r.push("/"); r.refresh();
     } catch {
       setErr("네트워크 오류가 발생했습니다.");
-    } finally { setBusy(false); }
+    } finally {
+      clearTimeout(t1); clearTimeout(t2);
+      setPhase(null);
+      setBusy(false);
+    }
   }
 
   return (
@@ -58,6 +78,20 @@ export default function OnboardForm({ workerIps }: { workerIps: WorkerIp[] }) {
                    autoComplete="off" required placeholder="발급받은 시크릿" />
           </label>
 
+          {busy && phase && (
+            <div className="phase"><span className="spin" />{phase}</div>
+          )}
+
+          {started && (
+            <div className="ok">
+              ✅ 연결됐습니다.
+              {reused
+                ? " 최근 수집한 데이터가 있어 바로 보여드립니다."
+                : " 첫 데이터 수집을 시작했습니다 — 시세·뉴스·전략이 채워지는 데 몇 분 걸립니다."}
+              <br />대시보드로 이동합니다…
+            </div>
+          )}
+
           {err && <div className="err">{err}</div>}
 
           {ipErr && (
@@ -81,7 +115,7 @@ export default function OnboardForm({ workerIps }: { workerIps: WorkerIp[] }) {
           )}
 
           <button className="btn" disabled={busy || !id || !sec}>
-            {busy ? "확인 중…" : "연결하고 시작하기"}
+            {busy ? <><span className="spin" />확인 중…</> : "연결하고 시작하기"}
           </button>
         </form>
       </div>

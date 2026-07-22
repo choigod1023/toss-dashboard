@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { LineChart, FlowChart } from "./charts";
+import Advisor from "./advisor";
 import { currentUserId } from "@/lib/session";
 import {
   getAccount, getHoldings, getCandles, getWatched,
@@ -7,7 +8,7 @@ import {
   getBriefings, getAnalystViews, getSentimentBySymbol,
   getRecentPosts, getSourceStats,
   getStrategy, getRegimes, getMetrics,
-  getInstitutionsFor, getInstitutionTop,
+  getInstitutionsFor, getInstitutionTop, getCandlesBulk, getRebalance,
 } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -33,26 +34,28 @@ export default async function Page() {
   const userId = await currentUserId();
   if (!userId) redirect("/onboard");
 
+  // DB 가 멀어 왕복 1회가 0.2~0.4s 다. 독립 쿼리는 전부 한 번에 던진다.
+  // (전엔 4단계로 순차 대기해서 페이지가 10초 넘게 걸렸다)
   const [acc, holdings, watched, kospi, flow, sys,
-         briefs, views, sentiment, posts, srcStats] = await Promise.all([
+         briefs, views, sentiment, posts, srcStats,
+         strat, regimes, metrics, instTop, rebal] = await Promise.all([
     getAccount(userId), getHoldings(userId), getWatched(),
     getIndicator("KOSPI", 120), getInvestorFlow("KOSPI", 20), getSystem(),
     getBriefings(), getAnalystViews(), getSentimentBySymbol(),
     getRecentPosts(14), getSourceStats(),
-  ]);
-  const [strat, regimes, metrics] = await Promise.all([
-    getStrategy(userId), getRegimes(), getMetrics(userId),
-  ]);
-  const usTickers = holdings.filter((h) => h.market_country === "US").map((h) => h.symbol);
-  const [instMine, instTop] = await Promise.all([
-    getInstitutionsFor(usTickers), getInstitutionTop(),
+    getStrategy(userId), getRegimes(), getMetrics(userId), getInstitutionTop(),
+    getRebalance(userId),
   ]);
   const inp = strat?.inputs ?? {};
   const arr = (v: any) => (Array.isArray(v) ? v : v ? JSON.parse(v) : []);
 
-  const charts = await Promise.all(
-    watched.slice(0, 4).map(async (w) => ({ ...w, rows: await getCandles(w.symbol, 120) }))
-  );
+  // 아래 둘만 위 결과에 의존한다 → 2단계에서 병렬로
+  const usTickers = holdings.filter((h) => h.market_country === "US").map((h) => h.symbol);
+  const [instMine, candleMap] = await Promise.all([
+    getInstitutionsFor(usTickers),
+    getCandlesBulk(watched.slice(0, 4).map((w) => w.symbol), 120),
+  ]);
+  const charts = watched.slice(0, 4).map((w) => ({ ...w, rows: candleMap.get(w.symbol) ?? [] }));
 
   const total = num(acc?.market_value_total_krw);
   const pnl = num(acc?.pnl_total_krw);
@@ -349,6 +352,96 @@ export default async function Page() {
         </div>
       )}
 
+
+      {rebal && (() => {
+        const moves = arr(rebal.target?.moves ?? rebal.target);
+        const g = rebal.guardrails ?? {};
+        const label: Record<string, string> = {
+          trim: "축소", hold: "유지", add: "추가", new: "신규",
+        };
+        return (
+          <div className="card" style={{ marginBottom: 14 }}>
+            <div className="chart-title">
+              <h2 style={{ margin: 0 }}>리밸런싱 제안</h2>
+              <span className="sym">목표 비중은 규칙으로 계산 · 설명만 AI</span>
+            </div>
+            <p style={{ margin: "8px 0 14px", fontSize: 14, lineHeight: 1.6 }}>
+              {rebal.rationale}
+            </p>
+
+            <div className="scroll">
+              <table>
+                <thead>
+                  <tr><th>종목</th><th>조치</th><th>목표 비중</th><th>이유</th></tr>
+                </thead>
+                <tbody>
+                  {moves.map((m: any, i: number) => (
+                    <tr key={i}>
+                      <td>
+                        <div>{m.name}</div>
+                        {m.symbol && <div className="sym">{m.symbol}</div>}
+                      </td>
+                      <td>
+                        <span className={`badge mv-${m.action}`}>
+                          {label[m.action] ?? m.action}
+                        </span>
+                      </td>
+                      <td>{m.target_weight != null
+                        ? `${(num(m.target_weight) * 100).toFixed(1)}%` : "—"}</td>
+                      <td style={{ textAlign: "left", whiteSpace: "normal",
+                                   maxWidth: 380, fontSize: 12.5,
+                                   color: "var(--text-secondary)" }}>{m.why}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {arr(rebal.target?.theme_gaps).length > 0 && (
+              <div style={{ marginTop: 14 }}>
+                <div className="hero-label">비어 있는 자산군·테마</div>
+                <div className="chips">
+                  {arr(rebal.target?.theme_gaps).map((t: string) => (
+                    <span className="chip" key={t}>{t}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {arr(rebal.target?.cautions).length > 0 && (
+              <ul className="bullets" style={{ marginTop: 12 }}>
+                {arr(rebal.target?.cautions).map((c: string, i: number) => (
+                  <li key={i}>{c}</li>
+                ))}
+              </ul>
+            )}
+
+            <details className="fold">
+              <summary>적용된 규칙 보기</summary>
+              <div className="rows" style={{ marginTop: 10 }}>
+                {[
+                  ["단일 종목 상한", `${(num(g.max_single_weight) * 100).toFixed(0)}%`, g.max_single_weight_why],
+                  ["최소 현금 비중", `${(num(g.min_cash_weight) * 100).toFixed(0)}%`, g.min_cash_weight_why],
+                  ["최소 보유 종목", `${g.min_positions}개`, g.min_positions_why],
+                  ["회차당 최대 교체", `${(num(g.max_turnover_per_round) * 100).toFixed(0)}%`, g.max_turnover_per_round_why],
+                ].map(([k, v, why]) => (
+                  <div key={k as string} style={{ paddingBottom: 8 }}>
+                    <div className="row"><span>{k}</span><span>{v}</span></div>
+                    {why && <div className="sym" style={{ lineHeight: 1.5 }}>{why}</div>}
+                  </div>
+                ))}
+              </div>
+              <div className="note">
+                {g.note}
+                <br />레버리지·인버스 ETF는 후보에서 제외했고, 실재가 확인되지 않은
+                종목은 자동으로 걸러냅니다.
+                <br /><b>매매 권유가 아니며 세금·거래비용은 반영되어 있지 않습니다.</b>
+              </div>
+            </details>
+          </div>
+        );
+      })()}
+
       <div className="grid two">
         <div className="card">
           <h2>종목별 여론 · 최근 30일</h2>
@@ -547,6 +640,7 @@ export default async function Page() {
           </div>
         </div>
       </div>
-    </div>
+          <Advisor />
+</div>
   );
 }
