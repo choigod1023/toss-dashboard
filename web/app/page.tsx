@@ -3,7 +3,7 @@ import { LineChart, FlowChart } from "./charts";
 import Advisor from "./advisor";
 import { currentUserId } from "@/lib/session";
 import {
-  getAccount, getHoldings, getCandles, getWatched,
+  getAccount, getHoldings,
   getIndicator, getInvestorFlow, getSystem, num,
   getBriefings, getAnalystViews, getSentimentBySymbol,
   getRecentPosts, getSourceStats,
@@ -36,10 +36,10 @@ export default async function Page() {
 
   // DB 가 멀어 왕복 1회가 0.2~0.4s 다. 독립 쿼리는 전부 한 번에 던진다.
   // (전엔 4단계로 순차 대기해서 페이지가 10초 넘게 걸렸다)
-  const [acc, holdings, watched, kospi, flow, sys,
+  const [acc, holdings, kospi, flow, sys,
          briefs, views, sentiment, posts, srcStats,
          strat, regimes, metrics, instTop, rebal] = await Promise.all([
-    getAccount(userId), getHoldings(userId), getWatched(),
+    getAccount(userId), getHoldings(userId),
     getIndicator("KOSPI", 120), getInvestorFlow("KOSPI", 20), getSystem(),
     getBriefings(), getAnalystViews(), getSentimentBySymbol(),
     getRecentPosts(14), getSourceStats(),
@@ -53,9 +53,12 @@ export default async function Page() {
   const usTickers = holdings.filter((h) => h.market_country === "US").map((h) => h.symbol);
   const [instMine, candleMap] = await Promise.all([
     getInstitutionsFor(usTickers),
-    getCandlesBulk(watched.slice(0, 4).map((w) => w.symbol), 120),
+    getCandlesBulk(holdings.slice(0, 4).map((h) => h.symbol), 120),
   ]);
-  const charts = watched.slice(0, 4).map((w) => ({ ...w, rows: candleMap.get(w.symbol) ?? [] }));
+  // 내 보유 종목 상위 4개를 그린다 (전엔 특정 종목이 고정돼 있었다).
+  const charts = holdings.slice(0, 4).map((h) => ({
+    symbol: h.symbol, name: h.name, rows: candleMap.get(h.symbol) ?? [],
+  }));
 
   const total = num(acc?.market_value_total_krw);
   const pnl = num(acc?.pnl_total_krw);

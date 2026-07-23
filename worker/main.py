@@ -55,9 +55,25 @@ def job_reference(c, conn, symbols: list[str]) -> None:
         j.rows += J.collect_warnings(c, conn, symbols)
 
 
+def _chart_symbols(conn) -> list[str]:
+    """차트·수집 대상 종목 = 모든 사용자의 보유 종목 + 관심종목.
+
+    ⚠️ 예전엔 watched(고정 관심종목)만 수집해서, 온보딩한 사용자의
+       보유 종목 캔들이 비어 대시보드 차트가 안 그려졌다.
+    """
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT DISTINCT symbol FROM holding_snapshot
+             WHERE snapshot_date > current_date - 7
+            UNION
+            SELECT symbol FROM stock WHERE is_watched
+        """)
+        return [r[0] for r in cur.fetchall()]
+
+
 def job_daily_candles(c, conn) -> None:
     with J.job_run(conn, "daily_candles") as j:
-        for sym in J.watched_symbols(conn):
+        for sym in _chart_symbols(conn):
             j.rows += J.collect_candles(c, conn, sym, "1d", pages=1)
 
 
