@@ -4,6 +4,14 @@
 모아 포트폴리오를 분석하는 개인용 대시보드. 시세만 보여주는 HTS와 달리
 "남들이 이 종목을 뭐라고 하는가"와 "내 포트폴리오의 구조적 위험"을 짚어준다.
 
+![Next.js](https://img.shields.io/badge/Next.js-000000?logo=nextdotjs&logoColor=white)
+![React](https://img.shields.io/badge/React-20232A?logo=react&logoColor=61DAFB)
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
+![Neon Postgres](https://img.shields.io/badge/Neon%20Postgres-4169E1?logo=postgresql&logoColor=white)
+![TimescaleDB](https://img.shields.io/badge/TimescaleDB-FDB515?logo=timescale&logoColor=black)
+![Gemini](https://img.shields.io/badge/Gemini%20API-8E75B2?logo=googlegemini&logoColor=white)
+
 > ⚠️ **투자 자문이 아니라 개인용 분석 도구입니다.** 가격을 예측하지 않고,
 > 매매를 지시하지 않습니다. 판단과 책임은 본인에게 있습니다.
 > 각자 자기 기기에서 자기 키로 돌리는 **BYOK(Bring Your Own Key)** 구조라,
@@ -47,7 +55,7 @@
 web/        Next.js 대시보드 + 온보딩         → Vercel (또는 로컬)
 worker/     Python 수집·분석 스케줄러          → 로컬 / Fly.io
             └ 토스 시세·계좌 · RSS · DART · SEC 13F · Gemini 분석
-Neon Postgres + TimescaleDB + pgvector
+Neon Postgres + TimescaleDB(hypertable) + pgcrypto(자격증명 암호화)
 ```
 
 ## 시작하기 (로컬)
