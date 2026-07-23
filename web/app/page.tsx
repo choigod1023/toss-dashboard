@@ -29,10 +29,19 @@ function Tile({ label, value, sub, tone }: {
   );
 }
 
-export default async function Page() {
+export default async function Page(
+  { searchParams }: { searchParams: Promise<{ privacy?: string }> },
+) {
   // 자격증명이 곧 신원이다 — 세션이 없으면 온보딩으로 보낸다
   const userId = await currentUserId();
   if (!userId) redirect("/onboard");
+
+  // 잔고 숨김(마스킹) 모드 — ?privacy=1.
+  // 스크린샷·공유용. 종목명·비율·분석은 그대로 두고, '내 돈'에 해당하는
+  // 절대 금액과 수량만 가린다. (시장가·지수 등 공개 정보는 가리지 않는다)
+  const priv = (await searchParams)?.privacy === "1";
+  const wonP = (n: number) => (priv ? "•••••" : won(n));
+  const qtyP = (n: number) => (priv ? "•••" : n.toLocaleString());
 
   // DB 가 멀어 왕복 1회가 0.2~0.4s 다. 독립 쿼리는 전부 한 번에 던진다.
   // (전엔 4단계로 순차 대기해서 페이지가 10초 넘게 걸렸다)
@@ -76,6 +85,10 @@ export default async function Page() {
         <div className="stamp">
           스냅샷 {acc?.snapshot_date ? String(acc.snapshot_date).slice(0, 10) : "—"}
           {acc?.exchange_rate ? ` · USD/KRW ${num(acc.exchange_rate).toFixed(1)}` : ""}
+          {" · "}
+          <a href={priv ? "/" : "/?privacy=1"} style={{ color: "inherit" }}>
+            {priv ? "🔓 금액 표시" : "🔒 잔고 숨김"}
+          </a>
         </div>
       </div>
 
@@ -228,13 +241,14 @@ export default async function Page() {
       )}
 
       <div className="grid tiles">
-        <Tile label="총 평가금액" value={`${won(total)}원`}
-              sub={`국내 ${won(num(acc?.market_value_krw))}원 · 미국 $${won(num(acc?.market_value_usd))}`} />
-        <Tile label="총 손익" value={`${pnl >= 0 ? "+" : ""}${won(pnl)}원`}
+        <Tile label="총 평가금액" value={`${wonP(total)}원`}
+              sub={priv ? "국내 ••••• · 미국 •••••"
+                        : `국내 ${won(num(acc?.market_value_krw))}원 · 미국 $${won(num(acc?.market_value_usd))}`} />
+        <Tile label="총 손익" value={`${pnl >= 0 ? "+" : ""}${wonP(pnl)}원`}
               tone={sign(pnl)} sub={`${pct(rate)} (총액 기준 자체계산)`} />
-        <Tile label="일간 손익" value={`${dPnl >= 0 ? "+" : ""}${won(dPnl)}원`}
+        <Tile label="일간 손익" value={`${dPnl >= 0 ? "+" : ""}${wonP(dPnl)}원`}
               tone={sign(dPnl)} sub={pct(dRate)} />
-        <Tile label="예수금" value={`${won(num(acc?.cash_buying_power_krw))}원`}
+        <Tile label="예수금" value={`${wonP(num(acc?.cash_buying_power_krw))}원`}
               sub="미수 제외 현금 매수가능" />
       </div>
 
@@ -255,15 +269,16 @@ export default async function Page() {
                     <div>{h.name}</div>
                     <div className="sym">{h.symbol} · {h.market_country}</div>
                   </td>
-                  <td>{num(h.quantity).toLocaleString()}</td>
-                  <td>{won(num(h.avg_price))}</td>
+                  <td>{qtyP(num(h.quantity))}</td>
+                  <td>{wonP(num(h.avg_price))}</td>
                   <td>{won(num(h.last_price))}</td>
-                  <td>{won(num(h.market_value))}</td>
-                  <td className={sign(num(h.pnl))}>{won(num(h.pnl))}</td>
+                  <td>{wonP(num(h.market_value))}</td>
+                  <td className={sign(num(h.pnl))}>{wonP(num(h.pnl))}</td>
                   <td className={sign(num(h.pnl_rate))}>{pct(num(h.pnl_rate))}</td>
-                  <td className={sign(num(h.daily_pnl))}>{won(num(h.daily_pnl))}</td>
+                  <td className={sign(num(h.daily_pnl))}>{wonP(num(h.daily_pnl))}</td>
                   <td className="sym">
-                    수수료 {won(num(h.commission))} / 세금 {won(num(h.tax))}
+                    {priv ? "수수료 ••• / 세금 •••"
+                          : <>수수료 {won(num(h.commission))} / 세금 {won(num(h.tax))}</>}
                   </td>
                 </tr>
               ))}

@@ -9,6 +9,19 @@
 > 각자 자기 기기에서 자기 키로 돌리는 **BYOK(Bring Your Own Key)** 구조라,
 > 자격증명이 본인 환경을 떠나지 않습니다.
 
+## 스크린샷
+
+<p align="center">
+  <img src="docs/screenshots/dashboard-demo.png" width="820" alt="대시보드 — 전략 진단·포트폴리오·시세 차트" />
+  <br/><sub>대시보드 — 전략 진단 · 전문가 3관점 · 포트폴리오 · 시세 차트 · 투자자별 수급.
+  <b>위 화면은 데모 데이터이며, 실제 계좌 정보가 아닙니다.</b> 헤더의 <code>🔒 잔고 숨김</code>으로 금액을 가릴 수 있습니다.</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/onboard.png" width="560" alt="온보딩 — 토스 Open API 키 입력" />
+  <br/><sub>온보딩 — 토스 Open API 키만 넣으면 검증 · 저장 · 수집이 자동으로 이어진다.</sub>
+</p>
+
 ## 무엇을 보여주나
 
 - **포트폴리오 진단** — 집중도(HHI)·변동성·베타·최대낙폭·승률을 코드로 계산
