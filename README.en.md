@@ -133,8 +133,8 @@ MIT. For personal study and use. The author is not responsible for investment lo
 | Item | Detail |
 |---|---|
 | **Contribution share** | **100%** (solo development) |
-| **Commits** | 13 / 13 (mine / all human commits) |
+| **Commits** | 15 / 15 (mine / all human commits) |
 | **Contributors** | 1 |
 | **AI coding tool** | Claude Code |
 
-<sub>Contribution share is counted by commit author email; bot and automation commits are excluded.</sub>
+<sub>Counting basis: commits reachable from **every branch** on origin (merge commits and empty commits excluded), counted by commit author email with one person’s multiple addresses merged; bot and automation commits are excluded.</sub>
