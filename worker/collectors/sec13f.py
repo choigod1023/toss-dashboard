@@ -16,6 +16,7 @@ API 키가 필요 없다. 대신 SEC 는 **연락처가 포함된 User-Agent 를
 from __future__ import annotations
 
 import logging
+import os
 import time
 import xml.etree.ElementTree as ET
 from datetime import date, datetime
@@ -25,8 +26,16 @@ import psycopg
 
 log = logging.getLogger(__name__)
 
-# SEC 규정: 연락처를 포함한 User-Agent 필수
-UA = {"User-Agent": "toss-dashboard/0.1 (personal research; j07801@hanyang.ac.kr)"}
+# SEC 규정: 연락처를 포함한 User-Agent 필수.
+# 연락처는 코드에 박지 않고 환경변수(SEC_CONTACT_EMAIL)로 주입한다.
+_CONTACT = os.getenv("SEC_CONTACT_EMAIL", "").strip()
+UA = {
+    "User-Agent": (
+        f"toss-dashboard/0.1 (personal research; {_CONTACT})"
+        if _CONTACT
+        else "toss-dashboard/0.1 (personal research)"
+    )
+}
 NS = {"i": "http://www.sec.gov/edgar/document/thirteenf/informationtable"}
 RATE_DELAY = 0.15   # 초당 10회 미만 유지
 
